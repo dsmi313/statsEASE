@@ -5,12 +5,49 @@ escapement estimation at Lower Granite: adults and smolts, one framework."*
 
 ## What this is
 
-Nine self-contained R sessions that reverse engineer the two production
-escapement tools at Lower Granite Dam — `escapeLGD` (EASE, adults) and
-`smoltEASE` (SCRAPI2, smolts) — treating them as one estimator structure applied
-at two life stages. Most sessions write a toy version by hand, then point at the
-exact production file and function that does the same job; session 7 instead runs
-production `SCRAPI2()` on the real MY2025 inputs and checks it by hand.
+Material that reverse engineers the two production escapement tools at Lower
+Granite Dam — `escapeLGD` (EASE, adults) and `smoltEASE` (SCRAPI2, smolts) —
+treating them as one estimator structure applied at two life stages. There are
+two tracks.
+
+### Track 1 — the short talk track (`R/session*.R`)
+
+Nine self-contained R sessions, each one idea, under a minute to run, one
+figure. They exist to make a 45-minute talk explainable out loud. Most sessions
+write a toy version by hand, then point at the exact production file and function
+that does the same job; session 7 instead runs production `SCRAPI2()` on the real
+MY2025 inputs and checks it by hand.
+
+### Track 2 — the interactive course (`inst/tutorials/estimator-histories/`)
+
+One cumulative `learnr` tutorial that rebuilds the compound bootstrap by hand
+against a single known-truth simulated fishery, following the estimators from
+SCOBI and SCRAPI to EASE and SCRAPI2. It is interactive: you edit and run the
+estimator code, predict before revealing, and answer graded questions. Launch it
+from the repository root:
+
+```r
+rmarkdown::run("inst/tutorials/estimator-histories/estimator-histories.Rmd")
+```
+
+`LEARNING_PATH.md` explains both tracks and the five course modules;
+`docs/bootstrap_map.md` is the precise production reference table for what each
+estimator resamples and where the draw enters. It is a repository-based
+tutorial, not an installed package (`DESCRIPTION` only declares dependencies).
+
+**Faithful vs simplified.** These parts of the course reproduce the real
+mechanism: the compound passage-count / GE / GSI bootstrap, one coherent GE and
+GSI column per replicate, GE inside `True` but excluded from `SR`, uniform
+within-stratum fish resampling with `1/SR` kept in the estimator (vs original
+SCRAPI's SR-weighted cancellation), the bootstrap-row mean point estimate with
+`stockA + stockB == WildSmolts` per row, and the EASE `wc_prop` and nighttime
+expansion. These parts are **simplified teaching reconstructions**, labeled as
+such inline: fallback/reascension is one net rate per stratum rather than the
+two-parameter `escapeLGD` likelihood; adult composition is a plain stock
+proportion rather than the PBT multinomial MLE; the composition `SR` is made
+stock-dependent to make the Horvitz-Thompson point crisp; and only the
+documented SCOBI `wc_prop = 1` assumption is reconstructed, not deeper SCOBI
+internals.
 
 ## Where to start
 
@@ -33,8 +70,13 @@ each item with one line saying why it was cut. Nothing was deleted.
 
 ## Ground rules
 
-Each session teaches one idea and one idea only: simulate, build the estimator by
-hand, recover against truth, one figure, Locate. A second figure means a second
-session. Single-use helpers are inlined; no defensive input checking, since these
-are teaching scripts, not package code. No session over a minute to run. No banner
-comments. No placeholder headings. No dates — those get added by hand.
+These apply to the **talk track** only. Each session teaches one idea and one
+idea only: simulate, build the estimator by hand, recover against truth, one
+figure, Locate. A second figure means a second session. Single-use helpers are
+inlined; no defensive input checking, since these are teaching scripts, not
+package code. No session over a minute to run. No banner comments. No placeholder
+headings. No dates — those get added by hand.
+
+The interactive course is cumulative by design and does not follow the
+one-idea/one-figure/one-minute rules; it preserves one simulated fishery across
+all five modules.

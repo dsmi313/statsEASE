@@ -1,0 +1,19 @@
+Package: statsEASE
+Title: Reverse Engineering EASE and SCRAPI2 for Escapement Estimation
+Version: 0.1.0
+Authors@R:
+    person("statsEASE", "contributors", role = c("aut", "cre"),
+           email = "fish.dzs0017@gmail.com")
+Description: Teaching material that reverse engineers the two production
+    escapement estimators used at Lower Granite Dam, EASE/escapeLGD for adults
+    and SCRAPI2/smoltEASE for smolts, treating them as one estimator structure
+    applied at two life stages. It holds a short talk track of self-contained R
+    scripts and an interactive learnr course that rebuilds the compound
+    bootstrap step by step against a known-truth simulated fishery.
+License: TBD (set a license before distributing; see PR notes)
+Encoding: UTF-8
+Suggests:
+    learnr,
+    shiny,
+    rmarkdown,
+    knitr

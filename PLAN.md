@@ -227,6 +227,11 @@ this session selects and finishes figures already produced.
 
 ## Rules this repository holds itself to
 
+These rules govern the **talk track** (`R/session*.R`). The interactive `learnr`
+course under `inst/tutorials/estimator-histories/` is cumulative by design and
+is deliberately exempt from the one-idea, one-figure, and one-minute rules; see
+`LEARNING_PATH.md`.
+
 - Each session teaches one idea and one idea only: simulate from a known truth,
   build the estimator by hand, recover it against that truth, show it in one
   figure, and Locate it in the two production sources. If a session needs a second
