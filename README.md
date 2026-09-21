@@ -32,7 +32,22 @@ rmarkdown::run("inst/tutorials/estimator-histories/estimator-histories.Rmd")
 
 `LEARNING_PATH.md` explains both tracks and the five course modules;
 `docs/bootstrap_map.md` is the precise production reference table for what each
-estimator resamples and where the draw enters.
+estimator resamples and where the draw enters. It is a repository-based
+tutorial, not an installed package (`DESCRIPTION` only declares dependencies).
+
+**Faithful vs simplified.** These parts of the course reproduce the real
+mechanism: the compound passage-count / GE / GSI bootstrap, one coherent GE and
+GSI column per replicate, GE inside `True` but excluded from `SR`, uniform
+within-stratum fish resampling with `1/SR` kept in the estimator (vs original
+SCRAPI's SR-weighted cancellation), the bootstrap-row mean point estimate with
+`stockA + stockB == WildSmolts` per row, and the EASE `wc_prop` and nighttime
+expansion. These parts are **simplified teaching reconstructions**, labeled as
+such inline: fallback/reascension is one net rate per stratum rather than the
+two-parameter `escapeLGD` likelihood; adult composition is a plain stock
+proportion rather than the PBT multinomial MLE; the composition `SR` is made
+stock-dependent to make the Horvitz-Thompson point crisp; and only the
+documented SCOBI `wc_prop = 1` assumption is reconstructed, not deeper SCOBI
+internals.
 
 ## Where to start
 

@@ -25,26 +25,28 @@ if (length(hp) == 0) stop("tutorial_helpers.R not found")
 source(hp[[1]])
 
 # One simulated fishery, preserved across every module.
-B_boot <- 1000L
-alpha  <- 0.10
-sim    <- simulate_smolt_season(seed = 6L, B = B_boot)
-weeks  <- sim$weeks
-fish   <- sim$fish
+B_boot    <- 1000L
+alpha     <- 0.10
+strata    <- 1:3
+sim       <- simulate_smolt_season(seed = 6L, B = B_boot)
+weeks     <- sim$weeks
+rear      <- sim$rear
+fish      <- sim$fish
 ge_draws  <- sim$ge_draws
 gsi_draws <- sim$gsi_draws
-truth  <- sim$truth
-sim_ad <- simulate_adult_season(seed = 6L)
+truth     <- sim$truth
+sim_ad    <- simulate_adult_season(seed = 6L, B = B_boot)
 ```
 
 ## The shared estimator
 
 Both production tools at Lower Granite Dam, EASE for adults and SCRAPI2 for
-smolts, run one estimator four times over. Written out, the skeleton is:
+smolts, run one estimator. Written out, the skeleton is:
 
 1. an observed **count** at the dam;
 2. an **inclusion or detection probability** the count is only a fraction of;
 3. an **expanded abundance**, count divided by that probability;
-4. a **composition** split of the total into groups;
+4. a **composition** split of the total into groups (rear type, then stock);
 5. **uncertainty** propagated to an interval by resampling and posterior draws.
 
 The whole tutorial builds each piece by hand against one simulated smolt season
@@ -52,17 +54,18 @@ whose truth we know. Here is the observed season.
 
 ```{r show-season, echo=TRUE}
 weeks
-truth$N_total   # true total wild smolts we are trying to recover
+c(total_smolts = truth$N_total, wild_smolts = truth$WildSmolts)
 ```
 
-Each week has a raw trap `Tally`, a trap sample `rate`, and a guidance
-efficiency `GE_true`. The inclusion probability for the count is
-`Ptrue = rate * GE`, and abundance expands as `count / Ptrue`.
+Each week has a raw trap `Tally` (all rear types), a trap sample `rate`, a
+guidance efficiency `GE_true`, and a true wild fraction `pWild`. The inclusion
+probability for the count is `Ptrue = rate * GE`, and abundance expands as
+`count / Ptrue`. The wild total is that abundance times the wild proportion.
 
 ### Complete the expansion
 
-Write the plug-in expansion: the total wild smolts implied by the observed
-counts at the point (non-random) inclusion probability.
+Write the plug-in expansion: the total smolts implied by the observed counts at
+the point (non-random) inclusion probability.
 
 ```{r expand, exercise=TRUE, exercise.lines=5}
 # weeks has columns Tally, rate, GE_true. Inclusion prob is rate * GE_true.
@@ -86,7 +89,7 @@ c(N_hat = round(N_hat), truth = truth$N_total)
 ```{r q-expand}
 question(
   "The plug-in estimate for this realized season lands somewhat above the true
-   6800. What is the single most important reason a ratio estimator like
+   total. What is the single most important reason a ratio estimator like
    count / (rate * GE) is unstable here?",
   answer("The low-GE stratum divides a handful of counts by a probability near
           0.01, so a few counted fish stand in for very many.", correct = TRUE,
@@ -114,7 +117,8 @@ by stratum. On the adult side, `escapeLGD/R/night_fall_reascend_wc_binom.R`
 
 A point estimate is one number. The production interval comes from a *compound*
 bootstrap: several independent sources of uncertainty stacked into one set of B
-replicates. We add them one at a time and watch what each does to the interval.
+replicates. We add them one at a time, then assemble one complete replicate that
+carries all of them.
 
 ### Stage 1: the plug-in, no uncertainty
 
@@ -129,7 +133,7 @@ round(N_plugin)
 
 The count itself is a binomial sample: of `est_daily` true passers, `Tally`
 were counted, with probability `ptrue`. Resampling that binomial is the first
-uncertainty source. Write one replicate.
+uncertainty source.
 
 ```{r countboot, exercise=TRUE, exercise.setup = "countboot-setup", exercise.lines=12}
 # est_daily and ptrue are defined for you. Draw B binomial resamples of the
@@ -163,22 +167,6 @@ for (b in seq_len(B)) {
 round(boot_summary(totals, truth$N_total), 1)
 ```
 
-```{r q-countboot}
-question(
-  "With only the count bootstrap on, is the interval you get an honest 90%
-   interval for total escapement?",
-  answer("No: it captures count-sampling noise only, and ignores the
-          uncertainty in GE, in composition, and in stock assignment, so it is
-          too narrow.", correct = TRUE,
-         message = "Correct. Each stage we add below widens the interval by a
-          source the count bootstrap alone leaves out."),
-  answer("Yes: resampling the count captures all the uncertainty there is.",
-         message = "GE, composition, and GSI are all still fixed at point
-          values here; their uncertainty has not entered yet."),
-  allow_retry = TRUE
-)
-```
-
 ### Stage 3: one coherent GE posterior draw per replicate
 
 GE is not known; it has a posterior. `ge_draws` is a 6-week by B matrix, each
@@ -186,9 +174,8 @@ GE is not known; it has a posterior. `ge_draws` is a 6-week by B matrix, each
 uses one whole column, never a different column per week.
 
 ```{r geboot, exercise=TRUE, exercise.lines=14}
-# ge_draws[, b] is this replicate's GE for all 6 weeks. weeks$rate and
-# weeks$Tally are available. Build ptrue_b from column b, resample the count on
-# that same basis, and expand.
+# ge_draws[, b] is this replicate's GE for all 6 weeks. Build ptrue_b from
+# column b, resample the count on that same basis, and expand.
 B <- 1000
 totals <- numeric(B)
 for (b in seq_len(B)) {
@@ -249,101 +236,276 @@ matrix, and inside the bootstrap loop uses `ge_day_mat[, b]` for replicate `b`
 `generate_ge_draws()` in `smoltEASE`, which selects **whole MCMC rows** so the
 GE values on different days stay jointly consistent within a draw.
 
-### Stage 4: composition and GSI, resampled per replicate
+### Stage 3b: the rear-type stage, and where GE does and does not go
 
-The genotyped `fish` sample splits the wild total into stocks A and B. Each fish
-carries an inclusion weight `SR`; the estimator weights by `1/SR`. Composition
-uncertainty comes from resampling the fish; GSI uncertainty comes from drawing a
-fresh stock-assignment column per replicate (`gsi_draws`).
+The trap count is all smolts; the wild total is that times the wild proportion.
+SCRAPI2 estimates the wild proportion from a rear-type sample (`rear`, each fish
+`W` or `H`), weighting by `1/True` where `True = rate * GE`. So GE enters the
+wild split too, through `True`. But GE is deliberately **excluded** from the
+composition weight `SR = rate * genotype_rate`. The next exercise makes the
+distinction concrete: rebuild `True` from a GE column, but leave `SR` alone.
 
-```{r additivity, exercise=TRUE, exercise.setup = "additivity-setup", exercise.lines=18}
-# For one replicate: resample fish uniformly, draw GSI column b, estimate pA,
-# and split a fixed wild total into stock A and stock B. Then check that the two
-# stock abundances add back to the total WITHIN the replicate.
+```{r rear, exercise=TRUE, exercise.setup = "rear-setup", exercise.lines=20}
+# For replicate b: rebuild True from GE column b, resample rear fish uniformly
+# WITHIN each stratum, and estimate the wild proportion by 1/True weighting.
+# Then confirm SR (composition weight) is untouched by GE.
 b <- 1
-wild_total <- truth$N_total
-idx   <- sample.int(nrow(fish), replace = TRUE)
-stock <- gsi_draws[idx, b]
-sr    <- fish$SR[idx]
-pA_b  <- sum((1 / sr) * (stock == "A")) / sum(1 / sr)
-stockA <- wild_total * pA_b
-stockB <- wild_total * (1 - pA_b)
-additivity_error <- ______              # should be ~0 by construction
-c(stockA = round(stockA), stockB = round(stockB),
-  sum = round(stockA + stockB), total = wild_total,
-  additivity_error = additivity_error)
+True_b <- weeks$rate[rear$week] * ge_draws[cbind(rear$week, b)]   # rate * GE_b
+pWild_hat <- numeric(3)
+for (h in strata) {
+  ri  <- which(rear$stratum == h)
+  idx <- ______                                  # uniform resample within stratum
+  w_is_wild <- rear$rear[idx] == "W"
+  pWild_hat[h] <- sum((1 / True_b[idx]) * w_is_wild) / sum(1 / True_b[idx])
+}
+c(pWild_hat = round(pWild_hat, 3),
+  SR_depends_on_GE = FALSE)   # SR = rate * genotype_rate, GE is not in it
 ```
 
-```{r additivity-setup}
+```{r rear-setup}
 b <- 1
 ```
 
-```{r additivity-hint}
-# pA_b + (1 - pA_b) = 1 exactly, so stockA + stockB - wild_total is 0 up to
-# floating point: additivity_error <- (stockA + stockB) - wild_total.
+```{r rear-hint}
+# Uniform within-stratum resample: idx <- sample(ri, length(ri), replace = TRUE).
+# ri already holds the row indices for stratum h, so resample those, keeping the
+# stratum's sample size.
 ```
 
-```{r additivity-solution}
+```{r rear-solution}
 b <- 1
-wild_total <- truth$N_total
-idx   <- sample.int(nrow(fish), replace = TRUE)
-stock <- gsi_draws[idx, b]
-sr    <- fish$SR[idx]
-pA_b  <- sum((1 / sr) * (stock == "A")) / sum(1 / sr)
-stockA <- wild_total * pA_b
-stockB <- wild_total * (1 - pA_b)
-additivity_error <- (stockA + stockB) - wild_total
-c(stockA = round(stockA), stockB = round(stockB),
-  sum = round(stockA + stockB), total = wild_total,
-  additivity_error = additivity_error)
+True_b <- weeks$rate[rear$week] * ge_draws[cbind(rear$week, b)]
+pWild_hat <- numeric(3)
+for (h in strata) {
+  ri  <- which(rear$stratum == h)
+  idx <- sample(ri, length(ri), replace = TRUE)
+  w_is_wild <- rear$rear[idx] == "W"
+  pWild_hat[h] <- sum((1 / True_b[idx]) * w_is_wild) / sum(1 / True_b[idx])
+}
+c(pWild_hat = round(pWild_hat, 3), SR_depends_on_GE = FALSE)
+```
+
+```{r q-rear}
+question(
+  "Why does SCRAPI2 keep GE inside True (the rear-type weight) but out of SR
+   (the composition weight)?",
+  answer("Whether wild/hatchery run timing correlates with GE is a real
+          empirical question, so True keeps GE; but SR answers 'how many fish
+          does this genotyped one represent within what was trapped', which is
+          about trap and lab subsampling, not guidance efficiency.",
+         correct = TRUE,
+         message = "Correct, and this is stated in the SCRAPI2 source: folding
+          GE into SR would import the 1/GE tail instability into stock
+          composition with no data-driven reason to."),
+  answer("It is an arbitrary choice with no consequence.",
+         message = "It is deliberate: GE in SR would inflate a few genotyped
+          fish on a near-zero-GE day, distorting composition."),
+  answer("GE belongs in neither; both should exclude it.",
+         message = "True keeps GE on purpose; only SR excludes it."),
+  allow_retry = TRUE
+)
+```
+
+### Stage 4: the full compound SCRAPI2 replicate
+
+Now assemble one complete replicate that carries **every** source at once, and
+store all its outputs in the same row: total passage, WildSmolts, stock A, and
+stock B. This is the heart of SCRAPI2. Fill in the marked lines.
+
+```{r compound, exercise=TRUE, exercise.setup = "compound-setup", exercise.lines=44}
+# Each row is one full replicate. Fill in: the GE column, Ptrue_b, est_daily_b,
+# the binomial count resample, the uniform within-stratum resamples, and the two
+# inverse-weight estimators (1/True for wild split, 1/SR for stock).
+B <- 800
+out <- matrix(0, nrow = B, ncol = 4,
+              dimnames = list(NULL, c("total", "wild", "stockA", "stockB")))
+add_err <- numeric(B)
+for (b in seq_len(B)) {
+  ge_b      <- ______                              # one whole GE column
+  ptrue_b   <- weeks$rate * ge_b
+  est_b     <- round(weeks$Tally / ptrue_b)
+  cstar     <- rbinom(6, est_b, ptrue_b)           # binomial passage resample
+  pass_str  <- tapply(cstar / ptrue_b, weeks$stratum, sum)[as.character(strata)]
+
+  True_b    <- weeks$rate[rear$week] * ge_b[rear$week]   # rate * GE_b per rear fish
+  wild_str  <- numeric(3)
+  for (h in strata) {
+    ri  <- which(rear$stratum == h)
+    idx <- sample(ri, length(ri), replace = TRUE)  # uniform within stratum
+    pW  <- sum((1 / True_b[idx]) * (rear$rear[idx] == "W")) / sum(1 / True_b[idx])
+    wild_str[h] <- pW * pass_str[h]
+  }
+  total_wild <- sum(wild_str)
+
+  stockA <- 0
+  for (h in strata) {
+    fi   <- which(fish$stratum == h)
+    idx  <- sample(fi, length(fi), replace = TRUE) # uniform within stratum
+    st   <- gsi_draws[idx, b]                      # one whole GSI column
+    sr   <- fish$SR[idx]
+    pA_h <- ______                                 # 1/SR-weighted stock-A proportion
+    stockA <- stockA + pA_h * wild_str[h]
+  }
+  stockB <- total_wild - stockA
+
+  out[b, ] <- c(sum(cstar / ptrue_b), total_wild, stockA, stockB)
+  add_err[b] <- (stockA + stockB) - total_wild     # additivity within the row
+}
+rbind(
+  WildSmolts = round(boot_summary(out[, "wild"],   truth$WildSmolts), 1),
+  stockA     = round(boot_summary(out[, "stockA"], truth$stockA), 1),
+  stockB     = round(boot_summary(out[, "stockB"], truth$stockB), 1))
+```
+
+```{r compound-setup}
+# global objects (weeks, rear, fish, ge_draws, gsi_draws, truth, strata) are available
+```
+
+```{r compound-hint}
+# ge_b <- ge_draws[, b] selects one coherent column.
+# pA_h <- sum((1 / sr) * (st == "A")) / sum(1 / sr) is the 1/SR-weighted
+# stock-A proportion (Horvitz-Thompson), identical in form to the wild split.
+```
+
+```{r compound-solution}
+B <- 800
+out <- matrix(0, nrow = B, ncol = 4,
+              dimnames = list(NULL, c("total", "wild", "stockA", "stockB")))
+add_err <- numeric(B)
+for (b in seq_len(B)) {
+  ge_b      <- ge_draws[, b]
+  ptrue_b   <- weeks$rate * ge_b
+  est_b     <- round(weeks$Tally / ptrue_b)
+  cstar     <- rbinom(6, est_b, ptrue_b)
+  pass_str  <- tapply(cstar / ptrue_b, weeks$stratum, sum)[as.character(strata)]
+
+  True_b    <- weeks$rate[rear$week] * ge_b[rear$week]
+  wild_str  <- numeric(3)
+  for (h in strata) {
+    ri  <- which(rear$stratum == h)
+    idx <- sample(ri, length(ri), replace = TRUE)
+    pW  <- sum((1 / True_b[idx]) * (rear$rear[idx] == "W")) / sum(1 / True_b[idx])
+    wild_str[h] <- pW * pass_str[h]
+  }
+  total_wild <- sum(wild_str)
+
+  stockA <- 0
+  for (h in strata) {
+    fi   <- which(fish$stratum == h)
+    idx  <- sample(fi, length(fi), replace = TRUE)
+    st   <- gsi_draws[idx, b]
+    sr   <- fish$SR[idx]
+    pA_h <- sum((1 / sr) * (st == "A")) / sum(1 / sr)
+    stockA <- stockA + pA_h * wild_str[h]
+  }
+  stockB <- total_wild - stockA
+
+  out[b, ] <- c(sum(cstar / ptrue_b), total_wild, stockA, stockB)
+  add_err[b] <- (stockA + stockB) - total_wild
+}
+c(max_additivity_error = max(abs(add_err)))   # ~0: stockA + stockB == WildSmolts every row
+rbind(
+  WildSmolts = round(boot_summary(out[, "wild"],   truth$WildSmolts), 1),
+  stockA     = round(boot_summary(out[, "stockA"], truth$stockA), 1),
+  stockB     = round(boot_summary(out[, "stockB"], truth$stockB), 1))
 ```
 
 ```{r q-additivity}
 question(
-  "SCRAPI2 reports the bootstrap MEAN, not the median. Why does the mean keep
-   stock A + stock B exactly equal to the wild total, while the median need
-   not?",
-  answer("Within every replicate the proportions sum to 1, so the stock
-          abundances sum to the total row by row; averaging preserves a row-wise
-          identity, taking medians column by column does not.", correct = TRUE,
-         message = "Exactly. This is why SCRAPI2 fixes pointEst = 'mean': it is
-          the only summary that keeps the reported components additive."),
-  answer("The median is biased and the mean is unbiased.",
-         message = "Additivity is about a linear identity holding row-wise, not
-          about bias; the median of sums need not equal the sum of medians."),
+  "The maximum additivity error across all B rows is ~1e-12 (floating point),
+   not a statistical near-zero. Why is it exact rather than approximate?",
+  answer("Within every replicate stockB is defined as total_wild - stockA, so
+          stockA + stockB equals total_wild identically, row by row.",
+         correct = TRUE,
+         message = "Exactly. SCRAPI2 gets the same guarantee because each row's
+          composition proportions sum to 1 by prop.table, so the mean of the
+          rows keeps the reported components additive. This is why SCRAPI2
+          enforces pointEst = 'mean'."),
+  answer("Because the bootstrap has converged with enough replicates.",
+         message = "Convergence controls Monte Carlo error, not this identity;
+          additivity holds in every single row regardless of B."),
   allow_retry = TRUE
 )
+```
+
+### Watch the smolt estimator evolve
+
+One row per stage, same simulated season, so you can see each source move the
+estimate, the width, and the skew. Coverage is measured across repeated seasons
+for the final wild total only.
+
+```{r smolt-history, echo=TRUE}
+set.seed(4)
+Bh <- 500
+count_only <- vapply(seq_len(Bh), function(b) {
+  sum(rbinom(6, weeks$Tally, weeks$Ptrue) / weeks$Ptrue)   # GE fixed at point
+}, numeric(1))
+plus_ge <- vapply(seq_len(Bh), function(b) {
+  pb <- weeks$rate * ge_draws[, b]; sum(rbinom(6, round(weeks$Tally / pb), pb) / pb)
+}, numeric(1))
+# full compound wild total, reusing the compound logic
+compound_wild <- function(d, B) {
+  vapply(seq_len(B), function(b) {
+    pb <- d$weeks$rate * d$ge_draws[, b]
+    cs <- rbinom(6, round(d$weeks$Tally / pb), pb)
+    ps <- tapply(cs / pb, d$weeks$stratum, sum)[as.character(1:3)]
+    Tb <- d$weeks$rate[d$rear$week] * d$ge_draws[cbind(d$rear$week, b)]
+    sum(vapply(1:3, function(h) {
+      ri <- which(d$rear$stratum == h); idx <- sample(ri, length(ri), replace = TRUE)
+      (sum((1 / Tb[idx]) * (d$rear$rear[idx] == "W")) / sum(1 / Tb[idx])) * ps[h]
+    }, numeric(1)))
+  }, numeric(1))
+}
+wild_boot <- compound_wild(sim, Bh)
+# coverage of the wild total across repeated seasons
+cover_wild <- mean(vapply(1:40, function(s) {
+  d <- simulate_smolt_season(seed = 100 + s, B = 200L)
+  wb <- compound_wild(d, 200L); ci <- quantile(wb, c(.05, .95))
+  ci[1] <= d$truth$WildSmolts && d$truth$WildSmolts <= ci[2]
+}, logical(1)))
+rbind(
+  stage_row("count only",        "count",              count_only, truth$N_total),
+  stage_row("+ GE posterior",    "count+GE",           plus_ge,    truth$N_total),
+  stage_row("+ rear split (wild)","count+GE+rear",     wild_boot,  truth$WildSmolts,
+            coverage = round(cover_wild, 2)))
 ```
 
 ## SCRAPI to SCRAPI2
 
 The original SCRAPI and the current SCRAPI2 share this skeleton but differ in
 three decisions: whether GE and GSI are fixed or uncertain, how fish are
-resampled, and how the point estimate is defined. The most consequential is the
-resampling choice, because it interacts with the `1/SR` weight already in the
-estimator.
+resampled **within each stratum**, and how the point estimate is defined. The
+most consequential is the resampling choice, because it interacts with the
+`1/SR` weight already in the estimator.
 
-### Uniform vs SR-weighted resampling
+### Uniform vs SR-weighted resampling, within stratum
 
 The estimator weights each fish by `1/SR`. The question is whether the
-*resample* should also use `SR`. Try both and measure coverage of the true
-stock-A proportion across many simulated seasons.
+*resample* should also use `SR`. Both production tools resample **within each
+collapsed stratum**; the only difference is the `prob` argument. Try both and
+measure coverage of the true stock-A proportion across many simulated seasons.
 
-```{r resample, exercise=TRUE, exercise.setup = "resample-setup", exercise.lines=22}
+```{r resample, exercise=TRUE, exercise.setup = "resample-setup", exercise.lines=24}
 # coverage() re-simulates a season each iteration and builds a composition
-# interval either uniformly or weighted by SR. Set `weighted` and compare.
-coverage <- function(weighted, nsim = 150, B = 300) {
+# interval by resampling WITHIN each stratum, either uniformly or weighted by SR.
+coverage <- function(weighted, nsim = 120, B = 250) {
   hit <- logical(nsim)
   for (s in seq_len(nsim)) {
     d  <- simulate_smolt_season(seed = s, B = 1L)
     ff <- d$fish
     th <- numeric(B)
     for (b in seq_len(B)) {
-      idx <- if (weighted)
-        sample.int(nrow(ff), replace = TRUE, prob = ff$SR)
-      else
-        sample.int(nrow(ff), replace = TRUE)
-      th[b] <- sum((1 / ff$SR[idx]) * (ff$stock[idx] == "A")) / sum(1 / ff$SR[idx])
+      num <- den <- 0
+      for (h in 1:3) {                             # resample within stratum
+        fi  <- which(ff$stratum == h)
+        idx <- if (weighted)
+          sample(fi, length(fi), replace = TRUE, prob = ff$SR[fi])
+        else
+          sample(fi, length(fi), replace = TRUE)
+        num <- num + sum((1 / ff$SR[idx]) * (ff$stock[idx] == "A"))
+        den <- den + sum(1 / ff$SR[idx])
+      }
+      th[b] <- num / den
     }
     ci <- quantile(th, c(.05, .95))
     hit[s] <- ci[1] <= d$truth$pA && d$truth$pA <= ci[2]
@@ -354,28 +516,34 @@ c(uniform = coverage(FALSE), weighted = coverage(TRUE))
 ```
 
 ```{r resample-setup}
-# nothing extra needed; simulate_smolt_season and stats are available
+# simulate_smolt_season and stats are available
 ```
 
 ```{r resample-hint}
-# You do not need to edit anything to see the effect: run it as is. The
-# uniform arm keeps 1/SR honest; the weighted arm resamples proportional to SR
-# AND divides by SR, so the two cancel.
+# You do not need to edit anything to see the effect: run it as is. The uniform
+# arm keeps 1/SR honest; the weighted arm resamples proportional to SR AND
+# divides by SR, so within each stratum the two cancel.
 ```
 
 ```{r resample-solution}
-coverage <- function(weighted, nsim = 150, B = 300) {
+coverage <- function(weighted, nsim = 120, B = 250) {
   hit <- logical(nsim)
   for (s in seq_len(nsim)) {
     d  <- simulate_smolt_season(seed = s, B = 1L)
     ff <- d$fish
     th <- numeric(B)
     for (b in seq_len(B)) {
-      idx <- if (weighted)
-        sample.int(nrow(ff), replace = TRUE, prob = ff$SR)
-      else
-        sample.int(nrow(ff), replace = TRUE)
-      th[b] <- sum((1 / ff$SR[idx]) * (ff$stock[idx] == "A")) / sum(1 / ff$SR[idx])
+      num <- den <- 0
+      for (h in 1:3) {
+        fi  <- which(ff$stratum == h)
+        idx <- if (weighted)
+          sample(fi, length(fi), replace = TRUE, prob = ff$SR[fi])
+        else
+          sample(fi, length(fi), replace = TRUE)
+        num <- num + sum((1 / ff$SR[idx]) * (ff$stock[idx] == "A"))
+        den <- den + sum(1 / ff$SR[idx])
+      }
+      th[b] <- num / den
     }
     ci <- quantile(th, c(.05, .95))
     hit[s] <- ci[1] <= d$truth$pA && d$truth$pA <= ci[2]
@@ -404,19 +572,20 @@ question(
 ```
 
 **Locate this in production.** `smoltEASE/R/SCRAPI.R` (original) resamples fish
-with `sample.int(nwk, replace = TRUE, prob = unlist(justwk$SR))` while its
-`thetahat` still divides by `SR` -- the cancellation you just saw.
-`smoltEASE/R/SCRAPI2.R` resamples with `sample.int(nrow(jw), replace = TRUE)`
-(no `prob`) and keeps `1/SR` and `1/True` only inside the estimator. The
-SCRAPI2 documentation states this directly: "weighting the resample by them
-while also applying their inverse inside the estimator would tend to cancel the
-intended inverse-probability correction."
+within week with `sample.int(nwk, replace = TRUE, prob = unlist(justwk$SR))`
+while its `thetahat` still divides by `SR` -- the cancellation you just saw.
+`smoltEASE/R/SCRAPI2.R` resamples within stratum with
+`sample.int(nrow(jw), replace = TRUE)` (no `prob`) and keeps `1/SR` and `1/True`
+only inside the estimator. The SCRAPI2 documentation states this directly:
+"weighting the resample by them while also applying their inverse inside the
+estimator would tend to cancel the intended inverse-probability correction."
 
-### The point estimate is the bootstrap mean
+### The point estimate is the bootstrap mean over B rows
 
-SCRAPI2 does not report the raw data evaluated once. Every one of the B rows is
-a full replicate, and the reported `Estimate` is the mean of those rows, while
-`LCI`/`UCI` are percentiles of the same rows.
+SCRAPI2 does not report the raw data evaluated once, and it no longer averages a
+separate `n_point` set of draws (`n_point` is deprecated). Every one of the B
+rows is a full replicate, and the reported `Estimate` is `colMeans(theta.b)`,
+the mean of those rows, while `LCI`/`UCI` are percentiles of the same rows.
 
 ```{r mean-vs-raw, echo=TRUE}
 set.seed(2)
@@ -425,7 +594,7 @@ totals <- vapply(seq_len(B_boot), function(b) {
   sum(rbinom(6, round(weeks$Tally / pb), pb) / pb)
 }, numeric(1))
 raw_point  <- sum(weeks$Tally / (weeks$rate * weeks$GE_true))
-boot_mean  <- mean(totals)
+boot_mean  <- mean(totals)                     # colMeans(theta.b) in SCRAPI2
 pctl       <- quantile(totals, c(alpha/2, 1 - alpha/2), names = FALSE)
 c(raw_point = round(raw_point), boot_mean = round(boot_mean),
   lci = round(pctl[1]), uci = round(pctl[2]))
@@ -451,22 +620,23 @@ question(
 
 The adult estimator has its own history. Old SCOBI assumed the counting window
 was open the whole time (`wc_prop = 1`); EASE corrects for the window being
-closed part of each hour (`wc_prop = 5/6`), then expands for nighttime passage,
-composition, and fallback. We use one simulated adult season.
+closed part of each hour (`wc_prop = 5/6`), expands for nighttime passage, splits
+by composition and stock, and adjusts for fallback. Fallback separates two
+truths: **ascensions** (fish that climbed the ladder) and **escapement**
+(ascensions that did not fall back without reascending).
 
 ```{r adult-season, echo=TRUE}
-sim_ad$wc                 # weekly window counts
-sim_ad$night              # nighttime-passage PIT data by stratum
-sim_ad$fallback           # fallback/reascension PIT data by stratum
-sim_ad$truth$N_total      # true adult escapement
+sim_ad$wc                                         # weekly window counts
+c(true_ascensions = sim_ad$truth$true_ascensions,
+  true_escapement = sim_ad$truth$true_escapement)
 ```
 
 ### SCOBI vs EASE window-count assumption
 
 ```{r wcprop, exercise=TRUE, exercise.lines=8}
 # The window is open a fraction wc_prop of the time, so the count must be
-# expanded by 1/wc_prop. Compute the expanded daytime total under the old SCOBI
-# assumption (wc_prop = 1) and under EASE (wc_prop = 5/6).
+# expanded by 1/wc_prop. Compute the expanded daytime total under old SCOBI
+# (wc_prop = 1) and under EASE (wc_prop = 5/6).
 wc_total <- sum(sim_ad$wc$wc)
 scobi <- wc_total / 1
 ease  <- ______
@@ -488,9 +658,10 @@ c(raw = wc_total, scobi = round(scobi), ease = round(ease))
 question(
   "What does the old SCOBI wc_prop = 1 assumption imply, and why does EASE
    change it?",
-  answer("SCOBI assumes every fish is counted (window always open); EASE
-          recognizes the window is closed part of each hour, so the raw count is
-          only 5/6 of daytime passage and must be expanded.", correct = TRUE,
+  answer("SCOBI assumes every daytime fish is counted (window always open);
+          EASE recognizes the window is closed part of each hour, so the raw
+          count is only 5/6 of daytime passage and must be expanded.",
+         correct = TRUE,
          message = "Correct. wc_prop = 1 leaves out no daytime fish by
           assumption; 5/6 restores the ones passing while the window was shut."),
   answer("SCOBI expands more than EASE.",
@@ -500,53 +671,142 @@ question(
 )
 ```
 
-### Nighttime passage, composition, and fallback stacked
+### One row through the whole adult calculation
 
-```{r adult-full, echo=TRUE}
-set.seed(3)
-B  <- B_boot
-wc_prop <- sim_ad$wc_prop
+Now flow one bootstrap row through every adult stage and store the group-specific
+escapement. Fill in the marked lines.
+
+```{r adult-full, exercise=TRUE, exercise.setup = "adult-full-setup", exercise.lines=34}
+# Each row: window-count binomial bootstrap expanded by 1/wc_prop, nighttime
+# expansion, fallback adjustment, then composition + GSI split into stocks.
+B  <- 800
+wc_prop     <- sim_ad$wc_prop
 wc_by_strat <- tapply(sim_ad$wc$wc, sim_ad$wc$stratum, sum)
-nd <- sim_ad$night; fd <- sim_ad$fallback
-totals <- numeric(B)
+nd <- sim_ad$night; fd <- sim_ad$fallback; comp <- sim_ad$comp; gsi <- sim_ad$gsi_draws
+asc <- esc <- escA <- numeric(B)
 for (b in seq_len(B)) {
-  # window count: parametric binomial bootstrap, expanded by 1/wc_prop
-  wc_b <- vapply(seq_along(wc_by_strat), function(s)
+  wc_b <- vapply(1:3, function(s)
     rbinom(1, round(wc_by_strat[s] / wc_prop), wc_prop) / wc_prop, numeric(1))
-  # nighttime passage rate per stratum, binomial bootstrap, expand by 1/(1-p)
   pn_b <- rbinom(3, nd$totalPass, nd$nightPass / nd$totalPass) / nd$totalPass
-  day_plus_night <- wc_b / (1 - pn_b)
-  # net fallback rate per stratum, binomial bootstrap, remove reascension-net fallback
+  ascend_str <- wc_b / (1 - pn_b)                 # window + night = ascensions
+  asc[b] <- sum(ascend_str)
+
   pf_b <- rbinom(3, fd$totalPass, fd$numReascend / fd$totalPass) / fd$totalPass
-  totals[b] <- sum(day_plus_night * (1 - pf_b))
+  esc_str <- ascend_str * (1 - pf_b)              # ascensions - net fallback
+  esc[b] <- sum(esc_str)
+
+  a_str <- 0
+  for (h in 1:3) {
+    ci  <- which(comp$stratum == h)
+    idx <- ______                                 # uniform resample within stratum
+    st  <- gsi[idx, b]                            # one whole GSI column
+    a_str <- a_str + mean(st == "A") * esc_str[h]
+  }
+  escA[b] <- a_str
 }
-round(boot_summary(totals, sim_ad$truth$N_total), 1)
+rbind(
+  ascensions = round(boot_summary(asc,  sim_ad$truth$true_ascensions), 1),
+  escapement = round(boot_summary(esc,  sim_ad$truth$true_escapement), 1),
+  stockA_esc = round(boot_summary(escA, sim_ad$truth$escA), 1))
 ```
 
-**Locate this in production.** `escapeLGD/R/night_fall_reascend_wc_binom.R`
-holds `expand_wc_binom_night()` (window-count binomial bootstrap `rbinom(boots,
-round(wc/wc_prop), wc_prop)/wc_prop`, then `1/(1-p_night)`) and `nightFall()`
-(binomial bootstrap of the nighttime rate, and a two-parameter fallback/
-reascension likelihood via `optimllh` in `fallback_reascend_likelihood.R`).
-Composition is `HNC_expand()` / `ascension_composition()`; the pieces are
-multiplied together and turned into a percentile interval in
-`apply_fallback_rates()` (`apply_fallback_rates_summarize.R`). The EASE annual
-workflow (`EASE-code`, e.g. "SY2025 STHD Step 3") calls this with `wc_prop = 5/6`
-and notes `wc_prop = 1` for old SCOBI.
+```{r adult-full-setup}
+# sim_ad is available
+```
+
+```{r adult-full-hint}
+# Uniform within-stratum resample of the composition sample:
+# idx <- sample(ci, length(ci), replace = TRUE).
+# Compare ascensions to true_ascensions (pre-fallback) and escapement to
+# true_escapement (after the (1 - pf_b) adjustment).
+```
+
+```{r adult-full-solution}
+B  <- 800
+wc_prop     <- sim_ad$wc_prop
+wc_by_strat <- tapply(sim_ad$wc$wc, sim_ad$wc$stratum, sum)
+nd <- sim_ad$night; fd <- sim_ad$fallback; comp <- sim_ad$comp; gsi <- sim_ad$gsi_draws
+asc <- esc <- escA <- numeric(B)
+for (b in seq_len(B)) {
+  wc_b <- vapply(1:3, function(s)
+    rbinom(1, round(wc_by_strat[s] / wc_prop), wc_prop) / wc_prop, numeric(1))
+  pn_b <- rbinom(3, nd$totalPass, nd$nightPass / nd$totalPass) / nd$totalPass
+  ascend_str <- wc_b / (1 - pn_b)
+  asc[b] <- sum(ascend_str)
+
+  pf_b <- rbinom(3, fd$totalPass, fd$numReascend / fd$totalPass) / fd$totalPass
+  esc_str <- ascend_str * (1 - pf_b)
+  esc[b] <- sum(esc_str)
+
+  a_str <- 0
+  for (h in 1:3) {
+    ci  <- which(comp$stratum == h)
+    idx <- sample(ci, length(ci), replace = TRUE)
+    st  <- gsi[idx, b]
+    a_str <- a_str + mean(st == "A") * esc_str[h]
+  }
+  escA[b] <- a_str
+}
+rbind(
+  ascensions = round(boot_summary(asc,  sim_ad$truth$true_ascensions), 1),
+  escapement = round(boot_summary(esc,  sim_ad$truth$true_escapement), 1),
+  stockA_esc = round(boot_summary(escA, sim_ad$truth$escA), 1))
+```
+
+> **Teaching approximation.** This models fallback as one net rate `p_fall` per
+> stratum and multiplies escapement by `(1 - p_fall)`. Production `escapeLGD`
+> instead infers fallback and reascension **jointly** with a two-parameter
+> binomial likelihood, maximized per bootstrap replicate:
+> `optim(par = c(.1, .9), fn = optimllh, ...)` in
+> `fallback_reascend_likelihood.R`, driven by `nightFall()`. When spillway data
+> are absent it assumes `P(reascend | fallback) = 1`. Composition here is a plain
+> stock proportion; production uses the PBT multinomial MLE in
+> `composition_estimation_utils.R`. The percentile interval is assembled in
+> `apply_fallback_rates()`.
+
+### Watch the adult estimator evolve
+
+```{r adult-history, echo=TRUE}
+set.seed(5)
+Bh <- 500
+wc_by_strat <- tapply(sim_ad$wc$wc, sim_ad$wc$stratum, sum)
+nd <- sim_ad$night; fd <- sim_ad$fallback
+adult_stage <- function(mode, B) {
+  vapply(seq_len(B), function(b) {
+    wp <- if (mode == "scobi") 1 else sim_ad$wc_prop
+    wc_b <- vapply(1:3, function(s)
+      rbinom(1, round(wc_by_strat[s] / wp), wp) / wp, numeric(1))
+    if (mode %in% c("scobi", "ease")) return(sum(wc_b))
+    pn <- rbinom(3, nd$totalPass, nd$nightPass / nd$totalPass) / nd$totalPass
+    ascend <- wc_b / (1 - pn)
+    if (mode == "night") return(sum(ascend))
+    pf <- rbinom(3, fd$totalPass, fd$numReascend / fd$totalPass) / fd$totalPass
+    sum(ascend * (1 - pf))
+  }, numeric(1))
+}
+rbind(
+  stage_row("SCOBI window (wc_prop=1)", "window",                adult_stage("scobi", Bh), sim_ad$truth$true_ascensions),
+  stage_row("EASE window (wc_prop=5/6)","window",                adult_stage("ease",  Bh), sim_ad$truth$true_ascensions),
+  stage_row("+ nighttime passage",      "window+night",          adult_stage("night", Bh), sim_ad$truth$true_ascensions),
+  stage_row("+ fallback (escapement)",  "window+night+fallback", adult_stage("fall",  Bh), sim_ad$truth$true_escapement))
+```
 
 ```{r q-adult}
 question(
   "Nighttime passage on the adult side is a bootstrapped binomial rate, not a
-   fitted posterior like smolt GE. What is the practical consequence?",
-  answer("It cannot be miscentered by a model: its uncertainty is only sampling
-          noise in the PIT tags, so poor PIT sample sizes widen it but a wrong
-          model cannot bias it the way a biased GE posterior biases SCRAPI2.",
+   fitted posterior like smolt GE. Which statement is accurate?",
+  answer("It is not subject to GE-style model-form or prior bias, but it can
+          still be biased if PIT-tagged fish are unrepresentative, detections
+          are misclassified, or a stratum pools different passage behavior; the
+          binomial bootstrap only captures sampling noise in the tags.",
          correct = TRUE,
-         message = "Correct. This is the one genuine structural difference
-          between the adult and smolt detection terms."),
-  answer("It makes the adult interval always narrower than the smolt interval.",
-         message = "Width depends on sample sizes and the other stacked
-          sources; the point is about centering, not a guaranteed width order."),
+         message = "Correct. 'No model to miscenter it' is not 'no bias
+          possible' -- representativeness, misclassification, and stratum
+          pooling are real threats the binomial interval does not reflect."),
+  answer("It carries only sampling noise and can never be biased.",
+         message = "Too strong: unrepresentative tags, misclassified
+          detections, or heterogeneous strata can bias it even though no fitted
+          model can."),
   allow_retry = TRUE
 )
 ```
@@ -644,11 +904,10 @@ question(
 
 ### Poor PIT sample sizes and biased GE
 
-```{r pit-bias, exercise=TRUE, exercise.setup = "pit-bias-setup", exercise.lines=18}
+```{r pit-bias, exercise=TRUE, exercise.setup = "pit-bias-setup", exercise.lines=16}
 # night_width(n) returns the 90% interval width of the nighttime-expanded adult
-# total when each stratum has n PIT tags. Try n = 50 and n = 500 and see the
-# width shrink. Then set ge_bias = 1.15 to feed SCRAPI2 a GE posterior 15% too
-# high and watch smolt coverage fall.
+# total when each stratum has n PIT tags. Try n = 50 and n = 500 and watch the
+# width shrink (more tags, tighter binomial rate).
 night_width <- function(n, B = 400) {
   totals <- numeric(B)
   wc_by_strat <- tapply(sim_ad$wc$wc, sim_ad$wc$stratum, sum)
@@ -662,12 +921,11 @@ c(n50 = night_width(50), n500 = night_width(______))
 ```
 
 ```{r pit-bias-setup}
-# helpers and sim_ad available
+# sim_ad is available
 ```
 
 ```{r pit-bias-hint}
-# Just pass 500 as the second sample size: night_width(500). More tags means a
-# tighter binomial rate and a narrower expanded interval.
+# Just pass 500 as the second sample size: night_width(500).
 ```
 
 ```{r pit-bias-solution}
@@ -721,11 +979,13 @@ question(
 ## Wrap-up
 
 You rebuilt the Lower Granite escapement estimator from a plug-in expansion to
-the full compound SCRAPI2 bootstrap, added GE and GSI posterior draws one at a
-time, saw why uniform within-stratum resampling keeps the `1/SR` correction
+the full compound SCRAPI2 replicate, added GE and GSI posterior draws and the
+rear-type split one at a time, verified `stock_A + stock_B == WildSmolts` in
+every row, saw why uniform within-stratum resampling keeps the `1/SR` correction
 honest where the original SCRAPI's SR-weighted resample cancelled it, walked the
-adult side from SCOBI's `wc_prop = 1` to EASE's `5/6` with nighttime passage and
-fallback, and diagnosed the characteristic failure modes.
+adult side from SCOBI's `wc_prop = 1` to EASE's `5/6` with nighttime passage,
+composition, and fallback separating ascensions from escapement, and diagnosed
+the characteristic failure modes.
 
 For the production map of what is resampled where, see `docs/bootstrap_map.md`.
 For how to run the whole track, see `LEARNING_PATH.md`.

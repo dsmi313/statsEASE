@@ -64,6 +64,11 @@ the fallback bootstrap, assembled in `apply_fallback_rates()`
 Smolt GE is a fitted Bayesian **posterior** (`fit_ge_model()` +
 `generate_ge_draws()`), so it can be **miscentered** by the model: a biased GE
 posterior biases escapement and no wider interval fixes it. Adult nighttime
-passage is a bootstrapped **binomial rate** from PIT tags, so it carries only
-sampling noise (poor PIT sample sizes widen it) and cannot be miscentered by a
-model. Everything else in the two skeletons lines up piece for piece.
+passage is a bootstrapped **binomial rate** from PIT tags, so it is not subject
+to that GE-style model-form or prior bias, and its binomial bootstrap captures
+the sampling noise in the tags (poor PIT sample sizes widen it). That is not the
+same as "no bias possible": it can still be biased if the PIT-tagged fish are
+unrepresentative of true passage, if day/night detections are misclassified, or
+if a stratum pools weeks with different passage behavior — none of which the
+binomial interval reflects. Everything else in the two skeletons lines up piece
+for piece.

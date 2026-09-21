@@ -17,4 +17,3 @@ Suggests:
     shiny,
     rmarkdown,
     knitr
-Config/tutorials: inst/tutorials/estimator-histories

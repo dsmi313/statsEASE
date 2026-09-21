@@ -28,32 +28,23 @@ answer graded conceptual questions.
 
 ### How to launch it
 
-The talk-track scripts in `R/` execute on load, so this project is not intended
-to be installed as a package. Launch the tutorial directly from the repository
-root:
+This is a **repository-based** learnr tutorial, not an installed package. The
+talk-track scripts in `R/` execute on load, so the project is deliberately not
+installed with `R CMD INSTALL`; `DESCRIPTION` only declares the tutorial's
+dependencies. Launch it directly from the repository root:
 
 ```r
 rmarkdown::run("inst/tutorials/estimator-histories/estimator-histories.Rmd")
 ```
 
-or, equivalently, with learnr:
-
-```r
-learnr::run_tutorial(
-  "inst/tutorials/estimator-histories",
-  package = NULL,
-  shiny_args = list(launch.browser = TRUE)
-)
-```
-
-`Rscript run_estimator_histories.R` from the repository root does the same. If
-the repository is later restructured into an installed package, the tutorial
-would then also launch with
-`learnr::run_tutorial("estimator-histories", package = "statsEASE")`.
+`Rscript run_estimator_histories.R` from the repository root does the same. There
+is no `run_tutorial(package = "statsEASE")` entry point, because the project is
+not installed as a package.
 
 Requires `learnr`, `shiny`, `rmarkdown`, and `knitr`. It uses only simulated
 data with fixed seeds and known truth, and writes nothing to any production-data
-directory.
+directory. `Rscript tests/smoke_test_tutorial.R` renders the tutorial and checks
+its structure and statistical invariants.
 
 ### The five modules, in order
 
